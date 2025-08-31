@@ -16,10 +16,6 @@
 
 ```
 
-This plan is sliced into tiny, testable chunks, perfect for a TDD workflow and for learning Go incrementally. Each milestone ships something runnable and benchmarkable.
-
-
------
 
 ## Table of Contents
 
