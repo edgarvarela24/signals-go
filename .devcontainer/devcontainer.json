@@ -6,8 +6,12 @@
   },
   "mounts": [
     "source=go-mod-cache,target=/go/pkg/mod,type=volume",
-    "source=go-build-cache,target=/home/vscode/.cache/go-build,type=volume"
+    "source=go-build-cache,target=/home/vscode/.cache/go-build,type=volume",
+    "source=${localEnv:SSH_AUTH_SOCK},target=/tmp/ssh-agent.sock,type=bind,consistency=cached"
   ],
+  "remoteEnv": {
+    "SSH_AUTH_SOCK": "/tmp/ssh-agent.sock"
+  },
   "features": {
     "ghcr.io/devcontainers/features/go:1": {
       "version": "latest"
