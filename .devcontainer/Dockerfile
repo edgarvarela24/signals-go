@@ -4,3 +4,5 @@ FROM golang:${GO_VERSION}-bookworm
 
 WORKDIR /workspaces/app
 ENV GOPATH=/go
+
+RUN go install github.com/magefile/mage@latest
