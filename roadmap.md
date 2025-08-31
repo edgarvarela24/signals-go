@@ -1,40 +1,45 @@
-# Signals: Roadmap to v1.0
+# Signals: Roadmap to v1.0 (Revised)
 
-> **Goal:** Build a production-grade, SolidJS-flavored reactive core for Go with an explicit `Scope` and a clean public API:
->
-> ```go
-> get, set := CreateSignal($, initial)
-> memo     := CreateMemo($, fn)
-> CreateEffect($, fn)
-> Batch($, fn)
-> Untrack($, fn)
-> ```
->
-> Signals return **getter/setter functions** (e.g., `firstName()` / `setFirstName("…")`) rather than method handles.
+ **Goal:** Build a production-grade, SolidJS-flavored reactive core for Go. The API is centered around an explicit `Engine` runtime and `Scope` objects that own all reactive primitives.
 
-You’re a solo dev, learning Go while you build this. This plan is sliced into **tiny, testable chunks**. Every milestone ships something runnable + benchmarkable, and each phase defines “Definition of Done”.
+ ```go
+ // Final API Goal
+ eng := signals.Start()
+ defer eng.Close()
 
----
+ rootScope := eng.Scope()
+ signal := rootScope.New(0)
+
+ eng.Handler(func(s \*signals.Scope, w, r) {
+ reqSignal := s.New(1) // Dies with the request
+ })
+
+```
+
+This plan is sliced into tiny, testable chunks, perfect for a TDD workflow and for learning Go incrementally. Each milestone ships something runnable and benchmarkable.
+
+
+-----
 
 ## Table of Contents
 
-1. [Project Skeleton (Milestone 0)](#project-skeleton-milestone-0)
-2. [Core: Scope + Scheduler (M1)](#core-scope--scheduler-m1)
-3. [Signals (M2)](#signals-m2)
-4. [Effects + Batching + Untrack (M3)](#effects--batching--untrack-m3)
-5. [Memos (M4)](#memos-m4)
-6. [Context: Provide/Use (M5)](#context-provideuse-m5)
-7. [Resources (async keyed fetch) (M6)](#resources-async-keyed-fetch-m6)
-8. [Stores (structured state) (M7)](#stores-structured-state-m7)
-9. [Concurrency Options (M8)](#concurrency-options-m8)
-10. [Performance Pass + Benchmarks (M9)](#performance-pass--benchmarks-m9)
-11. [Reliability: Fuzzing, Race, Faults (M10)](#reliability-fuzzing-race-faults-m10)
-12. [Docs, Examples, Versioning (M11)](#docs-examples-versioning-m11)
-13. [Release Checklist (v1.0)](#release-checklist-v10)
-14. [Appendix: Naming & Public API Reference](#appendix-naming--public-api-reference)
-15. [Appendix: Testing Tactics](#appendix-testing-tactics)
+1.  [Project Skeleton (Milestone 0)](https://www.google.com/search?q=%23project-skeleton-milestone-0)
+2.  [Core: The `Engine` and Root `Scope` (M1)](https://www.google.com/search?q=%23core-the-engine-and-root-scope-m1)
+3.  [Signals (M2)](https://www.google.com/search?q=%23signals-m2)
+4.  [Effects (M3)](https://www.google.com/search?q=%23effects-m3)
+5.  [Memos / Computed Values (M4)](https://www.google.com/search?q=%23memos--computed-values-m4)
+6.  [Derived Scopes for Concurrency and Context (M5)](https://www.google.com/search?q=%23derived-scopes-for-concurrency-and-context-m5)
+7.  [Resources (Async Fetching) (M6)](https://www.google.com/search?q=%23resources-async-fetching-m6)
+8.  [Stores (Structured State) (M7)](https://www.google.com/search?q=%23stores-structured-state-m7)
+9.  [Concurrency Options (M8)](https://www.google.com/search?q=%23concurrency-options-m8)
+10. [Performance Pass + Benchmarks (M9)](https://www.google.com/search?q=%23performance-pass--benchmarks-m9)
+11. [Reliability: Fuzzing, Race, Faults (M10)](https://www.google.com/search?q=%23reliability-fuzzing-race-faults-m10)
+12. [Docs, Examples, Versioning (M11)](https://www.google.com/search?q=%23docs-examples-versioning-m11)
+13. [Release Checklist (v1.0)](https://www.google.com/search?q=%23release-checklist-v10)
+14. [Appendix: Final Public API Reference](https://www.google.com/search?q=%23appendix-final-public-api-reference)
+15. [Appendix: Testing Tactics](https://www.google.com/search?q=%23appendix-testing-tactics)
 
----
+-----
 
 ## Project Skeleton (Milestone 0)
 
@@ -52,462 +57,424 @@ signals/
     signals/    # public API (this is the package users import)
   examples/
     counter/
-    http-live-config/
+    http-handler/
   bench/
     micro/
 ```
 
 **Tasks**
 
-* `go mod init github.com/you/signals`
-* Set up `make test`, `make bench`, `make lint`.
-* Add a tiny “hello world” test exercising `Root` with a no-op.
+  * `go mod init github.com/your-username/signals`
+  * Set up `magefile` or `Makefile` with `test`, `bench`, `lint` targets.
+  * Add a minimal "hello world" test that proves the test runner works.
 
 **Definition of Done**
 
-* `go test ./...` passes (even if mostly empty).
-* CI config (GitHub Actions): run tests, race detector, `go vet`.
+  * `go test ./...` passes.
+  * CI config (GitHub Actions): run tests, race detector, `go vet`.
 
----
+-----
 
-## Core: Scope + Scheduler (M1)
+## Core: The `Engine` and Root `Scope` (M1)
 
-**Outcome:** Deterministic execution boundary + microtask queue.
+**Outcome:** An explicit reactive runtime (`Engine`) that can be started and stopped, and provides a main "root" `Scope`.
 
-**Implement**
+**Public API**
 
-* `func Root(fn func($ Scope)) (dispose func())`
-* `type Scope interface { Batch(fn func()); Untrack[T any](fn func() T) T }`
-* Internal microtask queue (`sched`): enqueue, drain, prevent re-entrancy.
+```go
+package signals
 
-**Notes**
+func Start(opts ...Option) *Engine
+func (e *Engine) Close() error
+func (e *Engine) Scope() *Scope // Gets the main, long-lived scope
 
-* **Single goroutine assumption** for now: no locks on the hot path.
-* `dispose()` tears down the scope and cancels pending tasks.
+type Scope struct { /* unexported fields */ }
+func (s *Scope) Batch(fn func()) // For now, just handles disposed state
+```
 
-**Tests**
+**TDD Workflow**
 
-* Root runs, dispose stops future tasks.
-* Batch executes the body and then flushes queued tasks once.
+1.  **Write `TestEngine_StartAndClose`**: Test that `Start()` returns a non-nil `*Engine` and `Close()` doesn't panic.
+2.  **Write `TestEngine_Scope`**: Test that `eng.Scope()` returns a non-nil `*Scope`.
+3.  **Refactor your existing tests**: Adapt `TestRoot_DisposePreventsFutureWork` to use this new model. Create an engine, get its scope, then `Close()` the engine. Assert that a `Batch` call on the scope does nothing.
 
 **Definition of Done**
 
-* `Root/Batch/Untrack` exist with tests proving order guarantees.
+  * An `Engine` can be created and torn down.
+  * It provides a primary `Scope` whose lifecycle is tied to the `Engine`.
 
----
+-----
 
 ## Signals (M2)
 
-**Outcome:** First-class reactive value cell with getter/setter closures.
+**Outcome:** The core reactive primitive: a value cell that tracks subscriptions.
 
 **Public API**
 
 ```go
-func CreateSignal[T any]($ Scope, initial T) (
-  get func() T,
-  set func(T),
-  update func(func(*T)), // pointer-mutator to avoid copies
-)
-```
+// Method on *Scope
+func (s *Scope) New[T any](initial T) Signal[T]
 
-**Internal**
-
-* Cell holds `value`, `version uint64`, `subs` (subscriber IDs).
-* `get()` registers dependency when a computation is active.
-* `set(v)` updates value, bumps version, schedules subscribers.
-
-**Tests**
-
-* Get returns initial value.
-* Set triggers subscriber execution exactly once.
-* Update mutates in place and notifies.
-* No subscribers → set is near no-op (version changes only).
-
-**Definition of Done**
-
-* Deterministic ordering & no duplicate notifications in linear chains.
-
----
-
-## Effects + Batching + Untrack (M3)
-
-**Outcome:** Side-effect computations that react to signal changes.
-
-**Public API**
-
-```go
-func CreateEffect($ Scope, fn func())
-func Batch($ Scope, fn func())
-func Untrack[T any]($ Scope, fn func() T) T
-func OnCleanup($ Scope, fn func())
-```
-
-**Behavior**
-
-* Effect runs once immediately, then on any dependency change.
-* Within `Batch`, multiple sets coalesce into one flush.
-* `OnCleanup` runs when effect is re-executed or scope disposed.
-
-**Tests**
-
-* Effect runs once on create.
-* Multiple sets in `Batch` → effect runs once.
-* `Untrack` prevents dependency capture.
-
-**Definition of Done**
-
-* Topological ordering: upstream effects/memos run before downstream effects.
-
----
-
-## Memos (M4)
-
-**Outcome:** Derived values with dependency tracking & equality short-circuit.
-
-**Public API**
-
-```go
-func CreateMemo[T any]($ Scope, compute func() T, opts ...MemoOption) func() T
-
-type MemoOption = func(*memoCfg)
-func WithComparator[T any](eq func(a, b T) bool) MemoOption
-```
-
-**Behavior**
-
-* Memo recomputes when any dep version changes.
-* If comparator deems equal, memo does **not** notify downstream.
-
-**Tests**
-
-* No recompute when deps unchanged.
-* Equality short-circuiting prevents downstream effect runs.
-* Memo can depend on other memos and signals (nested graph).
-
-**Definition of Done**
-
-* Stable graph behavior under fan-out and fan-in scenarios.
-
----
-
-## Context: Provide/Use (M5)
-
-**Outcome:** DI-like mechanism bound to scope.
-
-**Public API**
-
-```go
-type ContextKey[T any] struct{ id uintptr }
-func Provide[T any]($ Scope, key *ContextKey[T], value T)
-func Use[T any]($ Scope, key *ContextKey[T]) T
-```
-
-**Tests**
-
-* Provide then Use returns the same value.
-* Nested providers shadow parent values.
-* Using after dispose panics or returns zero (choose and document).
-
-**Definition of Done**
-
-* Context retrieval is O(1) or near-constant and predictable.
-
----
-
-## Resources (async keyed fetch) (M6)
-
-**Outcome:** Solid’s `createResource`, Go-style.
-
-**Public API**
-
-```go
-type FetchFn[K comparable, T any] func(ctx context.Context, key K) (T, error)
-
-type ResourceHandle[T any] interface {
-  Ready() bool
-  Value() (T, error) // may block until ready
-  Peek() (T, error, bool) // non-blocking
+// Interfaces
+type Signal[T any] interface {
+    Readonly[T] // Embeds Get()
+    Set(T)
+    Update(func(*T))
 }
 
-func CreateResource[K comparable, T any](
-  $ Scope,
-  key func() K,
-  fetch FetchFn[K, T],
-  opts ...ResourceOption,
-) ResourceHandle[T]
-
-type ResourceOption = func(*resCfg)
-func WithDebounce(d time.Duration) ResourceOption
-func WithRetry(n int) ResourceOption
-func WithBackoff(min, max time.Duration) ResourceOption
-func WithStaleWhileRevalidate(on bool) ResourceOption
+type Readonly[T any] interface {
+    Get() T
+}
 ```
 
-**Behavior**
+**TDD Workflow**
 
-* When `key()` changes, cancel current fetch, start new one.
-* SWR: immediately serve cached value, refresh in background.
-* Debounce before firing fetch.
-* Dedupe in-flight by key (optional later).
-
-**Tests**
-
-* Key change triggers cancel → only latest result wins.
-* Debounce respected.
-* SWR returns previous value while fetching new one.
+1.  **Write `TestSignal_GetReturnsInitialValue`**: Call `scope.New(10)` and assert that the returned signal's `Get()` method returns `10`.
+2.  **Write `TestSignal_SetUpdatesValue`**: Call `Set(20)` and then assert `Get()` returns `20`.
+3.  **Write `TestSignal_UpdateMutatesValue`**: Call `Update(func(v *int){ *v = 30 })` and assert `Get()` returns `30`.
 
 **Definition of Done**
 
-* Deterministic cancellation + no goroutine leaks (check with `-race` + counters).
+  * `scope.New()` creates a stateful cell that can be read from and written to. The public API uses interfaces for good encapsulation.
 
----
+-----
 
-## Stores (structured state) (M7)
+## Effects (M3)
 
-**Outcome:** Convenient nested state with pointer-mutation updates.
+**Outcome:** Side-effect computations that automatically react to signal changes. The full reactive loop is now complete.
 
 **Public API**
 
 ```go
-func CreateStore[T any]($ Scope, initial T) (
-  read func() T,
-  set func(mutator func(*T)),
-)
+// Method on *Scope
+func (s *Scope) Effect(fn func()) (cleanup func())
+func (s *Scope) Untrack(fn func())
+func (s *Scope) OnCleanup(fn func())
+```
+
+**TDD Workflow**
+
+1.  **Write `TestEffect_RunsOnCreate`**: Create an effect and use a channel or a simple boolean to assert that its function runs once immediately.
+2.  **Write `TestEffect_RerunsOnSignalChange`**:
+      * Create a signal: `count := scope.New(0)`.
+      * Create a variable `runs := 0`.
+      * Create an effect: `scope.Effect(func() { _ = count.Get(); runs++ })`.
+      * Assert `runs` is `1`.
+      * Call `count.Set(1)`.
+      * Assert `runs` is `2`.
+3.  **Write `TestBatching`**: Set a signal multiple times inside a `scope.Batch(...)` block and assert the effect only runs once after the block completes.
+4.  **Write `TestUntrack`**: Call `Get()` on a signal inside an `scope.Untrack(...)` block within an effect, and assert that setting that signal later does *not* cause the effect to re-run.
+5.  **Write `TestOnCleanup`**: Use `OnCleanup` inside an effect. Trigger the effect to re-run and assert the cleanup function was called. Also test that `engine.Close()` triggers the final cleanup.
+
+**Definition of Done**
+
+  * Setting a signal now triggers dependent effects to run, respecting batching and untracking.
+  * The reactive scheduler correctly orders updates.
+
+-----
+
+## Memos / Computed Values (M4)
+
+**Outcome:** Derived, cached values that only re-run when dependencies *actually* change.
+
+**Public API**
+
+```go
+// Method on *Scope
+func (s *Scope) Compute[T any](fn func() T, opts ...Option) Readonly[T]
+```
+
+**TDD Workflow**
+
+1.  **Write `TestCompute_PropagatesChanges`**: Create a signal `a`, a computed `b` that returns `a.Get() * 2`, and an effect that reads `b`. Verify that changing `a` updates the effect.
+2.  **Write `TestCompute_ShortCircuits`**:
+      * Create a signal `num := scope.New(0)`.
+      * Create a computed `isEven := scope.Compute(func() bool { return num.Get() % 2 == 0 })`.
+      * Create an effect that tracks how many times it runs based on `isEven`.
+      * Call `num.Set(2)`. The effect should **not** re-run because the result of `isEven.Get()` (`true`) did not change.
+      * Call `num.Set(3)`. The effect **should** re-run because the result is now `false`.
+
+**Definition of Done**
+
+  * `scope.Compute` creates a derived value that correctly caches its result and prevents unnecessary downstream updates.
+
+-----
+
+## Derived Scopes for Concurrency and Context (M5)
+
+**Outcome:** A mechanism for creating temporary, cancellable scopes, perfect for HTTP requests or background jobs. Also includes a scope-bound DI mechanism.
+
+**Public API**
+
+```go
+// Method on *Engine
+func (e *Engine) NewScope(ctx context.Context) *Scope
+
+// Methods on *Scope for DI
+func (s *Scope) Provide[T any](key any, value T)
+func (s *Scope) Use[T any](key any) (T, bool)
+```
+
+**TDD Workflow**
+
+1.  **Write `TestDerivedScope_Cancellation`**:
+      * Create an `Engine`.
+      * Create a `context.WithCancel`.
+      * Create a derived scope: `s := eng.NewScope(ctx)`.
+      * Create an effect in the derived scope `s` that signals on a channel when it runs.
+      * `cancel()` the context.
+      * Verify that all work within the scope stops and it becomes disposed.
+2.  **Write `TestProvideUse`**: Test the DI mechanism within a single scope and then with a derived scope to ensure values can be read from parent scopes.
+
+**Definition of Done**
+
+  * The `Engine` can create temporary scopes whose lifecycle is tied to a `context.Context`, ensuring no goroutine leaks.
+  * The DI system provides a safe way to pass values down the scope tree.
+
+-----
+
+## Resources (Async Fetching) (M6)
+
+**Outcome:** A declarative primitive for managing asynchronous data fetching, inspired by SolidJS `createResource`.
+
+**Public API**
+
+```go
+// Method on *Scope
+func (s *Scope) Resource[K comparable, T any](
+  key func() K,
+  fetcher func(ctx context.Context, key K) (T, error),
+  opts ...Option,
+) Resource[T]
+
+// Interface returned by Resource
+type Resource[T any] interface {
+    Readonly[T] // Embeds Get() which returns the latest successful value
+    Loading() bool
+    Error() error
+}
+```
+
+**TDD Workflow**
+
+1.  **Write `TestResource_FetchesOnCreate`**: Create a resource and verify its `Loading()` state is initially true, then becomes false, and `Get()` returns the fetched value.
+2.  **Write `TestResource_RefetchesOnKeyChange`**: Create a signal for the resource key. Change the signal's value and assert that the fetcher function is called again.
+3.  **Write `TestResource_CancelsOnKeyChange`**: In the fetcher, use a `time.Sleep` and check `ctx.Done()`. Change the key mid-fetch and assert that the original fetch's context is canceled.
+
+**Definition of Done**
+
+  * `scope.Resource` provides a declarative, cancellation-safe way to handle async operations.
+
+-----
+
+## Stores (Structured State) (M7)
+
+**Outcome:** A convenient wrapper for managing nested or complex state objects reactively.
+
+**Public API**
+
+```go
+// Method on *Scope
+func (s *Scope) Store[T any](initial T) Store[T]
+
+// Interface for Store
+type Store[T any] interface {
+    Readonly[T] // Embeds Get()
+    Set(T)
+    Update(func(v *T))
+}
 ```
 
 **Behavior**
 
-* Internally uses a signal; `set` applies a mutator and notifies dependents.
-* Optional: field-level comparators (future).
+  * This is primarily an ergonomic wrapper around `scope.New`. It provides the same `Signal` interface but might be optimized for pointer-based updates on complex structs.
 
-**Tests**
+**TDD Workflow**
 
-* Mutations propagate like signals.
-* Large structs mutate without excessive allocs (compare allocations in bench).
+1.  **Write `TestStore_BehavesLikeSignal`**: Create a store with a struct and verify that `Update` mutations trigger effects correctly.
+2.  **Benchmark `Store_Update` vs `Signal_Set`**: For a large struct, verify that `Store.Update` results in fewer allocations than reading, modifying, and calling `Signal.Set`.
 
 **Definition of Done**
 
-* Same semantics as `CreateSignal` + pointer-update, with nice ergonomics.
+  * `scope.Store` provides an intuitive and efficient way to manage reactive structs.
 
----
+-----
 
 ## Concurrency Options (M8)
 
-**Outcome:** *Opt-in* cross-goroutine safety while keeping single-thread hot path fast.
+**Outcome:** *Opt-in* cross-goroutine safety, allowing writes from any goroutine to be safely applied to the owning scope.
 
-**Public API (additions)**
+**Public API**
 
 ```go
-type ScopeOption = func(*scopeCfg)
-func WithConcurrent() ScopeOption
+// Functional option for Start
+func WithConcurrent() Option
 
-func RootWith(opts ...ScopeOption, fn func($ Scope)) (dispose func())
-
-// Helpers
-func SafeSetter[T any]($ Scope, set func(T)) func(T) // marshals into scope loop
+// Method on *Scope (only available on concurrent scopes)
+func (s *Scope) Enqueue(fn func())
 ```
 
-**Behavior**
+**TDD Workflow**
 
-* In concurrent scopes, writes from other goroutines enqueue via an MPSC to the scope’s scheduler.
-* Reads are still safe if they go through getters inside the owning goroutine. If you need cross-g access to reads, you either:
-
-  * marshal via a function on the scope loop, or
-  * accept eventual consistency with explicit docs.
-
-**Tests**
-
-* Thousands of cross-goroutine sets → consistent order, no data race.
-* Dispose while work is enqueued behaves safely.
+1.  **Write `TestConcurrent_SetFromGoroutine`**:
+      * Start an engine with `signals.Start(signals.WithConcurrent())`.
+      * Create a signal and an effect in the main goroutine.
+      * In a new goroutine, use `scope.Enqueue(func() { signal.Set(...) })`.
+      * Assert that the effect is updated correctly in the main goroutine without a data race.
+2.  **Run all existing tests with `-race`** on a concurrent scope to ensure no race conditions were introduced.
 
 **Definition of Done**
 
-* `go test -race` consistently clean across stress tests.
+  * The engine can be configured to run in a concurrent mode.
+  * `go test ./... -race` is consistently clean across all stress tests.
 
----
+-----
 
 ## Performance Pass + Benchmarks (M9)
 
-**Outcome:** Quantified performance envelope.
+**Outcome:** A quantified understanding of the library's performance characteristics.
 
 **Micro-benchmarks**
 
-* `SignalGet`: aim \~atomic load territory (<10ns).
-* `SignalSet(no subs)`: <25ns.
-* `SignalSet(10 subs shallow)`: <300ns.
-* `MemoStable`: unchanged deps → \~0 extra work (version check only).
-* `Resource key flip`: cancel + start in <20µs (excluding network).
+  * `SignalGet`: Aim for sub-10ns (near atomic load).
+  * `SignalSet (no subscribers)`: Aim for sub-25ns.
+  * `SignalSet (10 subscribers)`: Aim for sub-300ns.
+  * `Compute (stable)`: The overhead for an unchanged computed value should be minimal (a version check).
+  * `Resource (key flip)`: Time to cancel the old fetch and start the new one should be sub-20µs (excluding the fetch itself).
 
-**Artifacts**
+**TDD Workflow**
 
-* `bench/micro/*_test.go` with `testing.B`.
-* Track allocations with `b.ReportAllocs()` and target “steady-state zero allocs” for getters.
+1.  Create `*_test.go` files inside a `bench/` directory.
+2.  Use `testing.B` and `b.ReportAllocs()` to write benchmarks for each primitive.
+3.  Target "steady-state zero allocs" for all `Get()` methods.
 
 **Definition of Done**
 
-* Baselines recorded; regressions gated in CI thresholds (even loose ones).
+  * Performance baselines are recorded and checked into the repository.
+  * CI can optionally run benchmarks to detect major regressions.
 
----
+-----
 
 ## Reliability: Fuzzing, Race, Faults (M10)
 
-**Outcome:** Hardened against edge cases and panics.
+**Outcome:** Hardened library against edge cases, panics, and unexpected inputs.
 
 **Tasks**
 
-* Table-driven tests for graph shapes (diamonds, cycles).
-* **Cycle detection**: detect self-dependency at runtime and panic with a helpful message.
-* Fuzz `CreateSignal`/`CreateMemo` interactions (Go fuzzing).
-* Inject panics in user callbacks; ensure recover boundary and `OnCleanup` still runs.
-* Ensure disposing scopes during flush leaves system consistent.
+  * Implement runtime cycle detection (an effect that depends on itself, directly or indirectly) and panic with a helpful error.
+  * Use Go's built-in fuzzing on the core primitives to discover unexpected interactions.
+  * Write tests that inject panics into user-provided functions (in `Effect`, `Compute`) and assert that the reactive system remains stable and cleanup functions are still called.
 
 **Definition of Done**
 
-* Fuzzers run in CI (short time budget).
-* Clear error messages; documented failure modes.
+  * Fuzz tests are added to the CI pipeline.
+  * The library is resilient to user code panics.
+  * Cyclical dependencies are detected and reported clearly.
 
----
+-----
 
 ## Docs, Examples, Versioning (M11)
 
-**Outcome:** New devs can succeed in 5 minutes.
+**Outcome:** A new developer can understand the library's value and be productive within 5 minutes.
 
 **Docs**
 
-* `README` quickstart with the API you picked.
-* `docs/architecture.md` (short): scope, cells, scheduler.
-* `docs/perf.md`: results + how to profile.
-* `docs/concurrency.md`: what’s safe, patterns, pitfalls.
+  * `README.md`: A comprehensive quickstart guide showing the `Engine` lifecycle and a simple reactive example.
+  * `docs/architecture.md`: A brief explanation of the `Engine`, `Scope`, and scheduler model.
+  * `docs/concurrency.md`: A clear guide on when to use the default vs. concurrent engine.
 
 **Examples**
 
-* `examples/counter` (CLI): signals/memos/effects.
-* `examples/http-live-config`: hot-reload config using signals.
-* `examples/search-resource`: debounced resource.
-
-**Versioning**
-
-* Tag `v0.x` until API is stable.
-* `CHANGELOG.md` with breaking change notes.
+  * `examples/counter`: A simple CLI app demonstrating `New`, `Compute`, `Effect`.
+  * `examples/http-handler`: An example using `eng.Handler` and `NewScope` to manage request-specific state.
+  * `examples/resource-search`: A web example using `scope.Resource` with debouncing for a live search box.
 
 **Definition of Done**
 
-* Copy-paste examples compile.
-* README includes badge for docs and CI.
+  * All public APIs are documented with GoDoc.
+  * The README is clear, and all examples compile and run from a fresh clone.
 
----
+-----
 
 ## Release Checklist (v1.0)
 
-* [ ] Public API frozen: `CreateSignal`, `CreateMemo`, `CreateEffect`, `Batch`, `Untrack`, `Provide/Use`, `CreateResource`, `CreateStore`, `Root`.
-* [ ] Deterministic scheduling & disposal documented.
-* [ ] `go test ./... -race` clean.
-* [ ] Benchmarks checked in with current numbers.
-* [ ] Examples compile from a fresh clone.
-* [ ] SemVer tag `v1.0.0`.
+  * [ ] Public API is frozen and reflects the final design.
+  * [ ] All API methods have comprehensive GoDoc documentation.
+  * [ ] `go test ./... -race` is consistently clean.
+  * [ ] Benchmarks are up-to-date with current performance numbers.
+  * [ ] All examples in the `examples/` directory are working and well-commented.
+  * [ ] `README.md` is complete and provides a compelling introduction.
+  * [ ] `CHANGELOG.md` is created.
+  * [ ] A `v1.0.0` Git tag is created and pushed.
 
----
+-----
 
-## Appendix: Naming & Public API Reference
-
-**Package**: `github.com/you/signals/pkg/signals`
+## Appendix: Final Public API Reference
 
 ```go
-// Lifetimes
-func Root(fn func($ Scope)) (dispose func())
-func RootWith(opts ...ScopeOption, fn func($ Scope)) (dispose func())
+package signals
 
-type Scope interface {
-  Batch(fn func())
-  Untrack[T any](fn func() T) T
+// --- Engine & Lifecycle ---
+
+type Engine struct { /* unexported fields */ }
+func Start(opts ...Option) *Engine
+func (e *Engine) Close() error
+func (e *Engine) Scope() *Scope
+func (e *Engine) NewScope(ctx context.Context) *Scope
+func (e *Engine) Handler(h func(s *Scope, w http.ResponseWriter, r *http.Request)) http.HandlerFunc
+
+// --- Scope ---
+
+type Scope struct { /* unexported fields */ }
+
+// Primitives are created from a Scope
+func (s *Scope) New[T any](initial T) Signal[T]
+func (s *Scope) Compute[T any](fn func() T, opts ...Option) Readonly[T]
+func (s *Scope) Effect(fn func()) (cleanup func())
+func (s *Scope) Store[T any](initial T) Store[T]
+func (s *Scope) Resource[K comparable, T any](key func() K, fetcher func(ctx context.Context, key K) (T, error), opts ...Option) Resource[T]
+
+// Utilities on Scope
+func (s *Scope) Batch(fn func())
+func (s *Scope) Untrack(fn func())
+func (s *Scope) OnCleanup(fn func())
+
+// DI on Scope
+func (s *Scope) Provide[T any](key any, value T)
+func (s *Scope) Use[T any](key any) (T, bool)
+
+// Concurrency on Scope (only on concurrent scopes)
+func (s *Scope) Enqueue(fn func())
+
+// --- Interfaces ---
+
+type Signal[T any] interface {
+    Readonly[T]
+    Set(T)
+    Update(func(*T))
 }
 
-// Signals
-func CreateSignal[T any]($ Scope, initial T) (
-  get func() T,
-  set func(T),
-  update func(func(*T)),
-)
-
-// Memo
-type MemoOption = func(*memoCfg)
-func CreateMemo[T any]($ Scope, compute func() T, opts ...MemoOption) func() T
-func WithComparator[T any](eq func(a, b T) bool) MemoOption
-
-// Effects & Cleanup
-func CreateEffect($ Scope, fn func())
-func Batch($ Scope, fn func())                  // sugar for $.Batch
-func Untrack[T any]($ Scope, fn func() T) T     // sugar for $.Untrack
-func OnCleanup($ Scope, fn func())
-
-// Context
-type ContextKey[T any] struct{ id uintptr }
-func Provide[T any]($ Scope, key *ContextKey[T], value T)
-func Use[T any]($ Scope, key *ContextKey[T]) T
-
-// Resource
-type FetchFn[K comparable, T any] func(ctx context.Context, key K) (T, error)
-type ResourceHandle[T any] interface {
-  Ready() bool
-  Value() (T, error)
-  Peek() (T, error, bool)
+type Readonly[T any] interface {
+    Get() T
 }
-type ResourceOption = func(*resCfg)
-func CreateResource[K comparable, T any](
-  $ Scope,
-  key func() K,
-  fetch FetchFn[K, T],
-  opts ...ResourceOption,
-) ResourceHandle[T]
 
-func WithDebounce(d time.Duration) ResourceOption
-func WithRetry(n int) ResourceOption
-func WithBackoff(min, max time.Duration) ResourceOption
-func WithStaleWhileRevalidate(on bool) ResourceOption
+type Store[T any] interface {
+    Signal[T]
+}
 
-// Store
-func CreateStore[T any]($ Scope, initial T) (
-  read func() T,
-  set func(mutator func(*T)),
-)
-
-// Concurrency
-type ScopeOption = func(*scopeCfg)
-func WithConcurrent() ScopeOption
-func SafeSetter[T any]($ Scope, set func(T)) func(T)
+type Resource[T any] interface {
+    Readonly[T]
+    Loading() bool
+    Error() error
+}
 ```
 
----
+-----
 
 ## Appendix: Testing Tactics
 
-**Unit tests**
-
-* Prefer **table-driven** tests for signals/memos/effects graphs.
-* Assert **call order** by appending to a shared slice (protected by scope).
-
-**Property tests (fuzz)**
-
-* Random sequences of `set`/`batch` against known graph shapes; assert invariants (e.g., memo result always equals function of deps).
-
-**Race detector**
-
-* Stress tests with thousands of concurrent `SafeSetter` calls into a concurrent scope.
-
-**Benchmarks**
-
-* Benchmark each primitive in isolation; add downstream subscribers incrementally (1, 5, 10, 50).
-
-**Failure injection**
-
-* Wrap user functions to occasionally panic; assert system recovery and cleanup calls.
-
----
-
-### Final Notes
-
-* Keep **single-goroutine** default blazing fast. Make concurrency **opt-in**.
-* Document **exact semantics** (when effects run, disposal order, how equality short-circuits).
-* Keep APIs **tiny**. If you’re unsure about an option, don’t ship it yet—add later with SemVer.
-
-You’ve got this. Build it thin, test it hard, then iterate. The speed you’ll gain from the explicit `Scope` + fine-grained signals will make Go devs do a double-take.
+  * **Unit Tests**: Use table-driven tests for different graph shapes (lines, fans, diamonds). Assert call order and counts by appending to a shared slice within a test's scope.
+  * **Lifecycle Tests**: For every feature, add a test case that ensures it behaves correctly when the `Engine` is closed or a derived `Scope`'s context is canceled.
+  * **Race Detector**: The `-race` flag is non-negotiable. Add a dedicated CI step that runs all tests under the race detector.
+  * **Benchmarks**: Benchmark each primitive in isolation first, then in combination to understand the overhead of the scheduler and graph updates.
+  * **Failure Injection**: Write tests that wrap user-provided functions (like in `Effect` or `Compute`) to deliberately panic. Assert that the system remains stable and doesn't crash.
