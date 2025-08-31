@@ -3,9 +3,7 @@ package signals
 import "sync/atomic"
 
 // Scope represents the lifetime of a reactive computation.
-type Scope struct {
-	isLive atomic.Bool
-}
+type Scope struct{ isLive atomic.Bool }
 
 // Batch method to resolve the compilation error in the test file.
 func (s *Scope) Batch(fn func()) {
@@ -14,4 +12,8 @@ func (s *Scope) Batch(fn func()) {
 		return
 	}
 	fn()
+}
+
+func New[T any](s *Scope, initial T) Signal[T] {
+	return &signal[T]{value: initial}
 }
