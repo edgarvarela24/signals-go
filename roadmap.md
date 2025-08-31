@@ -1,21 +1,33 @@
-# Signals: Roadmap to v1.0 (Revised)
+Of course. Since you've got a passing test and have finalized the API design, it's the perfect time to update the roadmap.
 
- **Goal:** Build a production-grade, SolidJS-flavored reactive core for Go. The API is centered around an explicit `Engine` runtime and `Scope` objects that own all reactive primitives.
+Here is the complete, revised `roadmap.md` file, updated to reflect the idiomatic, type-inferred `signals.New(scope, ...)` pattern for all reactive primitives. You can copy and paste this directly into your project.
 
- ```go
- // Final API Goal
- eng := signals.Start()
- defer eng.Close()
+-----
 
- rootScope := eng.Scope()
- signal := rootScope.New(0)
+# Signals: Roadmap to v1.0 (Final)
 
- eng.Handler(func(s \*signals.Scope, w, r) {
- reqSignal := s.New(1) // Dies with the request
- })
+> **Goal:** Build a production-grade, SolidJS-flavored reactive core for Go. The API is centered around an explicit `Engine` runtime and `Scope` objects, using idiomatic, package-level functions for creating primitives.
+>
+> ```go
+> // Final API Goal
+> eng := signals.Start()
+> defer eng.Close()
+> ```
 
-```
+> rootScope := eng.Scope()
+> signal := signals.New(rootScope, 0) // Package-level function
 
+> eng.Handler(func(s \*signals.Scope, w, r) {
+> // Primitives are created by passing the request-specific scope
+> reqSignal := signals.New(s, 1) // Dies with the request
+> })
+>
+> ```
+> 
+> This plan is sliced into tiny, testable chunks, perfect for a TDD workflow and for learning Go incrementally. Each milestone ships something runnable and benchmarkable.
+> ```
+
+-----
 
 ## Table of Contents
 
@@ -85,14 +97,14 @@ func (e *Engine) Close() error
 func (e *Engine) Scope() *Scope // Gets the main, long-lived scope
 
 type Scope struct { /* unexported fields */ }
-func (s *Scope) Batch(fn func()) // For now, just handles disposed state
+func (s *Scope) Batch(fn func()) // Batch is a core method of the scope's scheduler
 ```
 
 **TDD Workflow**
 
 1.  **Write `TestEngine_StartAndClose`**: Test that `Start()` returns a non-nil `*Engine` and `Close()` doesn't panic.
 2.  **Write `TestEngine_Scope`**: Test that `eng.Scope()` returns a non-nil `*Scope`.
-3.  **Refactor your existing tests**: Adapt `TestRoot_DisposePreventsFutureWork` to use this new model. Create an engine, get its scope, then `Close()` the engine. Assert that a `Batch` call on the scope does nothing.
+3.  **Refactor initial tests**: Adapt previous tests to use this new model. Create an engine, get its scope, then `Close()` the engine. Assert that a `Batch` call on the scope does nothing after the engine is closed.
 
 **Definition of Done**
 
@@ -108,8 +120,8 @@ func (s *Scope) Batch(fn func()) // For now, just handles disposed state
 **Public API**
 
 ```go
-// Method on *Scope
-func (s *Scope) New[T any](initial T) Signal[T]
+// Package-level generic function
+func New[T any](s *Scope, initial T) Signal[T]
 
 // Interfaces
 type Signal[T any] interface {
@@ -125,13 +137,13 @@ type Readonly[T any] interface {
 
 **TDD Workflow**
 
-1.  **Write `TestSignal_GetReturnsInitialValue`**: Call `scope.New(10)` and assert that the returned signal's `Get()` method returns `10`.
+1.  **Write `TestSignal_GetReturnsInitialValue`**: Call `New(scope, 10)` and assert that the returned signal's `Get()` method returns `10`.
 2.  **Write `TestSignal_SetUpdatesValue`**: Call `Set(20)` and then assert `Get()` returns `20`.
 3.  **Write `TestSignal_UpdateMutatesValue`**: Call `Update(func(v *int){ *v = 30 })` and assert `Get()` returns `30`.
 
 **Definition of Done**
 
-  * `scope.New()` creates a stateful cell that can be read from and written to. The public API uses interfaces for good encapsulation.
+  * `New()` creates a stateful cell that can be read from and written to. The public API uses interfaces for good encapsulation.
 
 -----
 
@@ -142,24 +154,24 @@ type Readonly[T any] interface {
 **Public API**
 
 ```go
-// Method on *Scope
-func (s *Scope) Effect(fn func()) (cleanup func())
-func (s *Scope) Untrack(fn func())
-func (s *Scope) OnCleanup(fn func())
+// Package-level generic functions
+func Effect(s *Scope, fn func()) (cleanup func())
+func Untrack(s *Scope, fn func())
+func OnCleanup(s *Scope, fn func())
 ```
 
 **TDD Workflow**
 
 1.  **Write `TestEffect_RunsOnCreate`**: Create an effect and use a channel or a simple boolean to assert that its function runs once immediately.
 2.  **Write `TestEffect_RerunsOnSignalChange`**:
-      * Create a signal: `count := scope.New(0)`.
+      * Create a signal: `count := New(scope, 0)`.
       * Create a variable `runs := 0`.
-      * Create an effect: `scope.Effect(func() { _ = count.Get(); runs++ })`.
+      * Create an effect: `Effect(scope, func() { _ = count.Get(); runs++ })`.
       * Assert `runs` is `1`.
       * Call `count.Set(1)`.
       * Assert `runs` is `2`.
 3.  **Write `TestBatching`**: Set a signal multiple times inside a `scope.Batch(...)` block and assert the effect only runs once after the block completes.
-4.  **Write `TestUntrack`**: Call `Get()` on a signal inside an `scope.Untrack(...)` block within an effect, and assert that setting that signal later does *not* cause the effect to re-run.
+4.  **Write `TestUntrack`**: Call `Get()` on a signal inside an `Untrack(scope, ...)` block within an effect, and assert that setting that signal later does *not* cause the effect to re-run.
 5.  **Write `TestOnCleanup`**: Use `OnCleanup` inside an effect. Trigger the effect to re-run and assert the cleanup function was called. Also test that `engine.Close()` triggers the final cleanup.
 
 **Definition of Done**
@@ -176,23 +188,23 @@ func (s *Scope) OnCleanup(fn func())
 **Public API**
 
 ```go
-// Method on *Scope
-func (s *Scope) Compute[T any](fn func() T, opts ...Option) Readonly[T]
+// Package-level generic function
+func Compute[T any](s *Scope, fn func() T, opts ...Option) Readonly[T]
 ```
 
 **TDD Workflow**
 
 1.  **Write `TestCompute_PropagatesChanges`**: Create a signal `a`, a computed `b` that returns `a.Get() * 2`, and an effect that reads `b`. Verify that changing `a` updates the effect.
 2.  **Write `TestCompute_ShortCircuits`**:
-      * Create a signal `num := scope.New(0)`.
-      * Create a computed `isEven := scope.Compute(func() bool { return num.Get() % 2 == 0 })`.
+      * Create a signal `num := New(scope, 0)`.
+      * Create a computed `isEven := Compute(scope, func() bool { return num.Get() % 2 == 0 })`.
       * Create an effect that tracks how many times it runs based on `isEven`.
       * Call `num.Set(2)`. The effect should **not** re-run because the result of `isEven.Get()` (`true`) did not change.
       * Call `num.Set(3)`. The effect **should** re-run because the result is now `false`.
 
 **Definition of Done**
 
-  * `scope.Compute` creates a derived value that correctly caches its result and prevents unnecessary downstream updates.
+  * `Compute()` creates a derived value that correctly caches its result and prevents unnecessary downstream updates.
 
 -----
 
@@ -206,9 +218,9 @@ func (s *Scope) Compute[T any](fn func() T, opts ...Option) Readonly[T]
 // Method on *Engine
 func (e *Engine) NewScope(ctx context.Context) *Scope
 
-// Methods on *Scope for DI
-func (s *Scope) Provide[T any](key any, value T)
-func (s *Scope) Use[T any](key any) (T, bool)
+// Package-level functions for DI
+func Provide[T any](s *Scope, key any, value T)
+func Use[T any](s *Scope, key any) (T, bool)
 ```
 
 **TDD Workflow**
@@ -236,8 +248,9 @@ func (s *Scope) Use[T any](key any) (T, bool)
 **Public API**
 
 ```go
-// Method on *Scope
-func (s *Scope) Resource[K comparable, T any](
+// Package-level generic function
+func Resource[K comparable, T any](
+  s *Scope,
   key func() K,
   fetcher func(ctx context.Context, key K) (T, error),
   opts ...Option,
@@ -259,7 +272,7 @@ type Resource[T any] interface {
 
 **Definition of Done**
 
-  * `scope.Resource` provides a declarative, cancellation-safe way to handle async operations.
+  * `Resource()` provides a declarative, cancellation-safe way to handle async operations.
 
 -----
 
@@ -270,8 +283,8 @@ type Resource[T any] interface {
 **Public API**
 
 ```go
-// Method on *Scope
-func (s *Scope) Store[T any](initial T) Store[T]
+// Package-level generic function
+func Store[T any](s *Scope, initial T) Store[T]
 
 // Interface for Store
 type Store[T any] interface {
@@ -281,18 +294,14 @@ type Store[T any] interface {
 }
 ```
 
-**Behavior**
-
-  * This is primarily an ergonomic wrapper around `scope.New`. It provides the same `Signal` interface but might be optimized for pointer-based updates on complex structs.
-
 **TDD Workflow**
 
 1.  **Write `TestStore_BehavesLikeSignal`**: Create a store with a struct and verify that `Update` mutations trigger effects correctly.
-2.  **Benchmark `Store_Update` vs `Signal_Set`**: For a large struct, verify that `Store.Update` results in fewer allocations than reading, modifying, and calling `Signal.Set`.
+2.  **Benchmark `Store_Update` vs `Signal_Set`**: For a large struct, verify that `Store.Update` results in fewer allocations than reading, modifying, and calling `Set` on a regular `Signal`.
 
 **Definition of Done**
 
-  * `scope.Store` provides an intuitive and efficient way to manage reactive structs.
+  * `Store()` provides an intuitive and efficient way to manage reactive structs.
 
 -----
 
@@ -338,12 +347,6 @@ func (s *Scope) Enqueue(fn func())
   * `Compute (stable)`: The overhead for an unchanged computed value should be minimal (a version check).
   * `Resource (key flip)`: Time to cancel the old fetch and start the new one should be sub-20µs (excluding the fetch itself).
 
-**TDD Workflow**
-
-1.  Create `*_test.go` files inside a `bench/` directory.
-2.  Use `testing.B` and `b.ReportAllocs()` to write benchmarks for each primitive.
-3.  Target "steady-state zero allocs" for all `Get()` methods.
-
 **Definition of Done**
 
   * Performance baselines are recorded and checked into the repository.
@@ -375,15 +378,15 @@ func (s *Scope) Enqueue(fn func())
 
 **Docs**
 
-  * `README.md`: A comprehensive quickstart guide showing the `Engine` lifecycle and a simple reactive example.
+  * `README.md`: A comprehensive quickstart guide showing the `Engine` lifecycle and the `signals.New` pattern.
   * `docs/architecture.md`: A brief explanation of the `Engine`, `Scope`, and scheduler model.
   * `docs/concurrency.md`: A clear guide on when to use the default vs. concurrent engine.
 
 **Examples**
 
   * `examples/counter`: A simple CLI app demonstrating `New`, `Compute`, `Effect`.
-  * `examples/http-handler`: An example using `eng.Handler` and `NewScope` to manage request-specific state.
-  * `examples/resource-search`: A web example using `scope.Resource` with debouncing for a live search box.
+  * `examples/http-handler`: An example using `eng.Handler` and `signals.New(s, ...)` to manage request-specific state.
+  * `examples/resource-search`: A web example using `Resource` with debouncing for a live search box.
 
 **Definition of Done**
 
@@ -410,37 +413,42 @@ func (s *Scope) Enqueue(fn func())
 ```go
 package signals
 
+import "context"
+import "net/http"
+
 // --- Engine & Lifecycle ---
 
 type Engine struct { /* unexported fields */ }
 func Start(opts ...Option) *Engine
 func (e *Engine) Close() error
-func (e *Engine) Scope() *Scope
+func (e *Gngine) Scope() *Scope
 func (e *Engine) NewScope(ctx context.Context) *Scope
 func (e *Engine) Handler(h func(s *Scope, w http.ResponseWriter, r *http.Request)) http.HandlerFunc
 
 // --- Scope ---
 
 type Scope struct { /* unexported fields */ }
-
-// Primitives are created from a Scope
-func (s *Scope) New[T any](initial T) Signal[T]
-func (s *Scope) Compute[T any](fn func() T, opts ...Option) Readonly[T]
-func (s *Scope) Effect(fn func()) (cleanup func())
-func (s *Scope) Store[T any](initial T) Store[T]
-func (s *Scope) Resource[K comparable, T any](key func() K, fetcher func(ctx context.Context, key K) (T, error), opts ...Option) Resource[T]
-
-// Utilities on Scope
 func (s *Scope) Batch(fn func())
-func (s *Scope) Untrack(fn func())
-func (s *Scope) OnCleanup(fn func())
-
-// DI on Scope
-func (s *Scope) Provide[T any](key any, value T)
-func (s *Scope) Use[T any](key any) (T, bool)
-
-// Concurrency on Scope (only on concurrent scopes)
+// Concurrent scopes only
 func (s *Scope) Enqueue(fn func())
+
+// --- Primitives (Package-level functions) ---
+
+func New[T any](s *Scope, initial T) Signal[T]
+func Compute[T any](s *Scope, fn func() T, opts ...Option) Readonly[T]
+func Effect(s *Scope, fn func()) (cleanup func())
+func Store[T any](s *Scope, initial T) Store[T]
+func Resource[K comparable, T any](s *Scope, key func() K, fetcher func(ctx context.Context, key K) (T, error), opts ...Option) Resource[T]
+
+// --- Utilities (Package-level functions) ---
+
+func Untrack(s *Scope, fn func())
+func OnCleanup(s *Scope, fn func())
+
+// --- DI (Package-level functions) ---
+
+func Provide[T any](s *Scope, key any, value T)
+func Use[T any](s *Scope, key any) (T, bool)
 
 // --- Interfaces ---
 
@@ -449,15 +457,12 @@ type Signal[T any] interface {
     Set(T)
     Update(func(*T))
 }
-
 type Readonly[T any] interface {
     Get() T
 }
-
 type Store[T any] interface {
     Signal[T]
 }
-
 type Resource[T any] interface {
     Readonly[T]
     Loading() bool
