@@ -174,14 +174,15 @@ package signals
 func Compute[T any](s *Scope, fn func() T, opts ...Option) Readonly[T]
 ```
 
-**TDD Workflow**
+**TDD Workflow:**
 
-1.  **Write `TestCompute_PropagatesChanges`**: Create a signal `a`, a computed `b` that returns `a.Get() * 2`, and an effect that reads `b`. Verify that changing `a` updates the effect.
-2.  **Write `TestCompute_ShortCircuits`**:
-      * Create `num := New(scope, 0)`.
-      * Create `isEven := Compute(scope, func() bool { return num.Get() % 2 == 0 })`.
-      * Create an effect tracking `isEven`.
-      * Call `num.Set(2)`. The effect should **not** re-run because the result of `isEven.Get()` (`true`) did not change.
+1.  **`TestMemo_ReturnsComputedValue`**: Create a memo from a signal. Assert that calling `.Get()` on the memo returns the correct computed value.
+2.  **`TestMemo_IsLazy`**: Create a memo but do not read it. Change its dependency. Assert that the memo's computation function has *not* run yet. Then, call `.Get()` and assert it runs exactly once.
+3.  **`TestMemo_CachesValue`**: Create a memo and call `.Get()` on it multiple times without changing its dependencies. Assert that the computation function was only called once.
+4.  **`TestMemo_UpdatesWhenDependencyChanges`**: Create a memo and get its value. Change a dependency. Get the memo's value again and assert that it has been updated and the computation function has run again.
+5.  **`TestMemo_WorksWithMultipleDependencies`**: Create a memo that reads from two different signals. Change one, assert it updates. Change the other, assert it updates.
+6.  **`TestMemo_WorksWhenNested`**: Create a memo that depends on another memo. Change the underlying signal and assert the entire chain updates correctly.
+
 
 **Definition of Done**
 
